@@ -74,7 +74,7 @@ async def chat(request: ChatRequest):
 
     # 4. Generate & Track Usage
     try:
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        model = genai.GenerativeModel('gemini-2.5-flash')
         response = model.generate_content(prompt)
         
         # Only charge/increment if we actually hit the AI
