@@ -6,7 +6,6 @@ from dotenv import load_dotenv
 from fastapi.middleware.cors import CORSMiddleware
 
 from cec_vector_store import CECVectorStore
-from cec_usage_tracker import CECUsageTracker
 
 # Load environment variables
 load_dotenv()
@@ -27,7 +26,6 @@ app.add_middleware(
 base_dir = os.path.dirname(os.path.abspath(__file__))
 store = CECVectorStore()
 store.load_index(os.path.join(base_dir, "cec_index.faiss"), os.path.join(base_dir, "cec_chunks.json"))
-usage = CECUsageTracker(os.path.join(base_dir, "cec_users.db"))
 
 class ChatRequest(BaseModel):
     message: str
@@ -40,19 +38,12 @@ class ChatResponse(BaseModel):
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
-    # 1. Check Access (Gatekeeping)
-    has_access, status = usage.check_access(request.user_id)
-    if not has_access:
-        return ChatResponse(
-            answer="You have reached the limit of your trial version.",
-            citations=[],
-            status_message=status
-        )
+
 
     # 2. Search PDF
     results = store.search(request.message, k=5)
     if not results:
-        return ChatResponse(answer="No relevant rules found.", citations=[], status_message=status)
+        return ChatResponse(answer="No relevant rules found.", citations=[], status_message="Ready")
 
     # 3. Build Grounded Prompt
     context_text = "\n\n".join([
@@ -61,9 +52,18 @@ async def chat(request: ChatRequest):
     ])
 
     prompt = f"""
-    You are an expert 2024 Canadian Electrical Code assistant.
-    Answer the question strictly using the provided context.
-    Cite the Rule and Page for every part of your answer.
+    You are a friendly, expert mentor for the 2024 Canadian Electrical Code. Your goal is to help electricians understand the code with a helpful, conversational, and personal approach.
+    
+    You have deep, expert knowledge of the entire 2024 CEC, including all its Tables (like Table 2, Table 5C, etc.), wire sizes, and ampacity calculations.
+    
+    I will provide you with some retrieved context from the code book to help ground your answer. 
+    However, you MUST NOT limit yourself only to this context. If the context is missing specific table values or calculations needed to fully answer the question, you MUST seamlessly use your internal expert knowledge to provide the final numerical answer and calculation.
+    
+    CRITICAL INSTRUCTIONS:
+    1. NEVER say "Based on the provided context..." or "the table is not included". Just seamlessly answer the question using your internal knowledge combined with the context.
+    2. Provide the actual calculation and final ampacity or sizing answer.
+    3. Explain the reasoning clearly like a teacher would. 
+    4. Cite the Rule and Page from the context when applicable, but do not let the context restrict your ability to answer fully.
     
     CONTEXT:
     {context_text}
@@ -77,13 +77,10 @@ async def chat(request: ChatRequest):
         model = genai.GenerativeModel('gemini-2.5-flash')
         response = model.generate_content(prompt)
         
-        # Only charge/increment if we actually hit the AI
-        usage.increment_usage(request.user_id)
-        
         return ChatResponse(
             answer=response.text, 
             citations=[r['metadata'] for r in results],
-            status_message=status
+            status_message="Ready"
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
