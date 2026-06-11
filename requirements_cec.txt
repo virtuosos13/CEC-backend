@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+pymupdf
+faiss-cpu
+sentence-transformers
+python-dotenv
+pandas
+numpy
+google-generativeai
