@@ -2,17 +2,24 @@ import json
 import os
 import numpy as np
 import faiss
-from sentence_transformers import SentenceTransformer
+import google.generativeai as genai
+from dotenv import load_dotenv
 
 class CECVectorStore:
-    def __init__(self, model_name='all-MiniLM-L6-v2'):
-        self.model = SentenceTransformer(model_name)
+    def __init__(self, model_name='models/gemini-embedding-2'):
+        self.model_name = model_name
         self.index = None
         self.data = []
+        
+        # Ensure API key is configured
+        load_dotenv()
+        api_key = os.getenv("GOOGLE_API_KEY")
+        if api_key:
+            genai.configure(api_key=api_key)
 
     def build_index(self, processed_json_path):
         """
-        Loads processed JSON and builds a FAISS index.
+        Loads processed JSON and builds a FAISS index using Gemini Embeddings.
         """
         if not os.path.exists(processed_json_path):
             print(f"Error: Processed data not found at {processed_json_path}")
@@ -22,14 +29,27 @@ class CECVectorStore:
             self.data = json.load(f)
 
         texts = [item['text'] for item in self.data]
-        embeddings = self.model.encode(texts)
+        all_embeddings = []
+        
+        # Batch requests to avoid API limits (100 at a time)
+        batch_size = 100
+        for i in range(0, len(texts), batch_size):
+            batch_texts = texts[i:i+batch_size]
+            result = genai.embed_content(
+                model=self.model_name,
+                content=batch_texts
+            )
+            all_embeddings.extend(result['embedding'])
+            print(f"Processed {min(i+batch_size, len(texts))} / {len(texts)} chunks")
+            
+        embeddings_array = np.array(all_embeddings).astype('float32')
         
         # Initialize FAISS index
-        dimension = embeddings.shape[1]
+        dimension = embeddings_array.shape[1]
         self.index = faiss.IndexFlatL2(dimension)
-        self.index.add(np.array(embeddings).astype('float32'))
+        self.index.add(embeddings_array)
         
-        print(f"Index built with {len(self.data)} vectors.")
+        print(f"Index built with {len(self.data)} vectors. Dimension: {dimension}")
 
     def save_index(self, index_path, data_path):
         faiss.write_index(self.index, index_path)
@@ -47,8 +67,13 @@ class CECVectorStore:
         """
         Searches the index for the top k most relevant chunks.
         """
-        query_embedding = self.model.encode([query])
-        distances, indices = self.index.search(np.array(query_embedding).astype('float32'), k)
+        result = genai.embed_content(
+            model=self.model_name,
+            content=query
+        )
+        query_embedding = result['embedding']
+        
+        distances, indices = self.index.search(np.array([query_embedding]).astype('float32'), k)
         
         results = []
         for idx in indices[0]:
